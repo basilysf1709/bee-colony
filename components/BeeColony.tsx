@@ -3,40 +3,51 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 interface Bee {
+  id: number;
   x: number;
   y: number;
-  type: 'scout' | 'forager';
+  type: 'scout' | 'onlooker' | 'forager';
   targetSource?: FoodSource;
+  returnToHive: boolean;
 }
 
 interface FoodSource {
+  id: number;
   x: number;
   y: number;
   nectar: number;
   discovered: boolean;
 }
 
+interface Hive {
+  x: number;
+  y: number;
+}
+
 interface Images {
   food: HTMLImageElement;
   scout: HTMLImageElement;
+  onlooker: HTMLImageElement;
   forager: HTMLImageElement;
+  hive: HTMLImageElement;
 }
 
 const BeeColonyOptimization: React.FC = () => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const [bees, setBees] = useState<Bee[]>([]);
-    const [foodSources, setFoodSources] = useState<FoodSource[]>([]);
-    const [stats, setStats] = useState({ discoveredSources: 0, totalNectar: 0 });
-    const [images, setImages] = useState<Images | null>(null);
-    const [speed, setSpeed] = useState<number>(50);
-  
-    const canvasWidth = 800;
-    const canvasHeight = 600;
-    const numBees = 20;
-    const numFoodSources = 10;
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [bees, setBees] = useState<Bee[]>([]);
+  const [foodSources, setFoodSources] = useState<FoodSource[]>([]);
+  const [hive, setHive] = useState<Hive>({ x: 0, y: 0 });
+  const [stats, setStats] = useState({ discoveredSources: 0, totalNectar: 0 });
+  const [images, setImages] = useState<Images | null>(null);
+  const [speed, setSpeed] = useState<number>(50);
+
+  const canvasWidth = 800;
+  const canvasHeight = 600;
+  const numBees = 50;
+  const numFoodSources = 10;
 
   const loadImages = useCallback(() => {
-    const imageNames = ['food', 'scout', 'forager'] as const;
+    const imageNames = ['food', 'scout', 'onlooker', 'forager', 'hive'] as const;
     const loadedImages: Partial<Images> = {};
 
     imageNames.forEach(name => {
@@ -51,20 +62,30 @@ const BeeColonyOptimization: React.FC = () => {
     });
   }, []);
 
-  const initializeBees = useCallback(() => {
+  const initializeSimulation = useCallback(() => {
+    // Initialize hive
+    const newHive = {
+      x: canvasWidth / 2,
+      y: canvasHeight / 2
+    };
+    setHive(newHive);
+
+    // Initialize bees
     const newBees: Bee[] = Array.from({ length: numBees }, (_, i) => ({
-      x: Math.random() * canvasWidth,
-      y: Math.random() * canvasHeight,
-      type: i < numBees / 2 ? 'scout' : 'forager'
+      id: i,
+      x: newHive.x,
+      y: newHive.y,
+      type: i < numBees * 0.2 ? 'scout' : 'onlooker',
+      returnToHive: false
     }));
     setBees(newBees);
-  }, [canvasWidth, canvasHeight]);
 
-  const initializeFoodSources = useCallback(() => {
-    const newFoodSources: FoodSource[] = Array.from({ length: numFoodSources }, () => ({
+    // Initialize food sources
+    const newFoodSources: FoodSource[] = Array.from({ length: numFoodSources }, (_, i) => ({
+      id: i,
       x: Math.random() * canvasWidth,
       y: Math.random() * canvasHeight,
-      nectar: Math.floor(Math.random() * 100) + 1,
+      nectar: Math.floor(Math.random() * 100) + 50,
       discovered: false
     }));
     setFoodSources(newFoodSources);
@@ -72,42 +93,74 @@ const BeeColonyOptimization: React.FC = () => {
 
   const updateSimulation = useCallback(() => {
     setBees(prevBees => 
-      prevBees.map(bee => bee.type === 'scout' ? updateScoutBee(bee) : updateForagerBee(bee))
+      prevBees.map(bee => {
+        switch (bee.type) {
+          case 'scout':
+            return updateScoutBee(bee);
+          case 'onlooker':
+            return updateOnlookerBee(bee);
+          case 'forager':
+            return updateForagerBee(bee);
+          default:
+            return bee;
+        }
+      })
     );
     updateStats();
   }, []);
 
   const updateScoutBee = useCallback((bee: Bee): Bee => {
     const newBee = { ...bee };
-    newBee.x += (Math.random() - 0.5) * 10;
-    newBee.y += (Math.random() - 0.5) * 10;
+    if (newBee.returnToHive) {
+      // Move towards hive
+      const dx = hive.x - newBee.x;
+      const dy = hive.y - newBee.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance < 5) {
+        newBee.returnToHive = false;
+        // Perform waggle dance
+        const onlookers = bees.filter(b => b.type === 'onlooker' && !b.targetSource);
+        if (onlookers.length > 0) {
+          const recruitedBee = onlookers[Math.floor(Math.random() * onlookers.length)];
+          recruitedBee.type = 'forager';
+          recruitedBee.targetSource = newBee.targetSource;
+        }
+      } else {
+        newBee.x += (dx / distance) * 5;
+        newBee.y += (dy / distance) * 5;
+      }
+    } else {
+      // Explore for new food sources
+      newBee.x += (Math.random() - 0.5) * 10;
+      newBee.y += (Math.random() - 0.5) * 10;
+      newBee.x = Math.max(0, Math.min(newBee.x, canvasWidth));
+      newBee.y = Math.max(0, Math.min(newBee.y, canvasHeight));
 
-    newBee.x = Math.max(0, Math.min(newBee.x, canvasWidth));
-    newBee.y = Math.max(0, Math.min(newBee.y, canvasHeight));
+      const discoveredSource = foodSources.find(
+        source => !source.discovered && 
+        Math.abs(source.x - newBee.x) < 20 && 
+        Math.abs(source.y - newBee.y) < 20
+      );
 
-    const discoveredSource = foodSources.find(
-      source => !source.discovered && 
-      Math.abs(source.x - newBee.x) < 20 && 
-      Math.abs(source.y - newBee.y) < 20
-    );
-
-    if (discoveredSource) {
-      discoveredSource.discovered = true;
-      newBee.targetSource = discoveredSource;
+      if (discoveredSource) {
+        discoveredSource.discovered = true;
+        newBee.targetSource = discoveredSource;
+        newBee.returnToHive = true;
+      }
     }
-
     return newBee;
-  }, [canvasWidth, canvasHeight, foodSources]);
+  }, [canvasWidth, canvasHeight, foodSources, hive, bees]);
+
+  const updateOnlookerBee = useCallback((bee: Bee): Bee => {
+    const newBee = { ...bee };
+    // Onlooker bees stay in the hive
+    newBee.x = hive.x + (Math.random() - 0.5) * 20;
+    newBee.y = hive.y + (Math.random() - 0.5) * 20;
+    return newBee;
+  }, [hive]);
 
   const updateForagerBee = useCallback((bee: Bee): Bee => {
     const newBee = { ...bee };
-    const discoveredSources = foodSources.filter(source => source.discovered && source.nectar > 0);
-    
-    if (!newBee.targetSource && discoveredSources.length > 0) {
-      // Assign a random discovered food source to the forager
-      newBee.targetSource = discoveredSources[Math.floor(Math.random() * discoveredSources.length)];
-    }
-
     if (newBee.targetSource) {
       const dx = newBee.targetSource.x - newBee.x;
       const dy = newBee.targetSource.y - newBee.y;
@@ -117,21 +170,17 @@ const BeeColonyOptimization: React.FC = () => {
         newBee.targetSource.nectar = Math.max(0, newBee.targetSource.nectar - 1);
         if (newBee.targetSource.nectar === 0) {
           newBee.targetSource = undefined;
+          newBee.type = 'onlooker';
         }
       } else {
         newBee.x += (dx / distance) * 3;
         newBee.y += (dy / distance) * 3;
       }
     } else {
-      // If no target, move randomly like a scout
-      newBee.x += (Math.random() - 0.5) * 5;
-      newBee.y += (Math.random() - 0.5) * 5;
-      newBee.x = Math.max(0, Math.min(newBee.x, canvasWidth));
-      newBee.y = Math.max(0, Math.min(newBee.y, canvasHeight));
+      newBee.type = 'onlooker';
     }
-
     return newBee;
-  }, [foodSources, canvasWidth, canvasHeight]);
+  }, []);
 
   const updateStats = useCallback(() => {
     setStats({
@@ -149,6 +198,10 @@ const BeeColonyOptimization: React.FC = () => {
 
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
+    // Draw hive
+    ctx.drawImage(images.hive, hive.x - 25, hive.y - 25, 50, 50);
+
+    // Draw food sources
     foodSources.forEach(source => {
       ctx.drawImage(images.food, source.x - 10, source.y - 10, 20, 20);
       if (source.discovered) {
@@ -157,11 +210,23 @@ const BeeColonyOptimization: React.FC = () => {
       }
     });
 
+    // Draw bees
     bees.forEach(bee => {
-      const image = bee.type === 'scout' ? images.scout : images.forager;
+      let image;
+      switch (bee.type) {
+        case 'scout':
+          image = images.scout;
+          break;
+        case 'onlooker':
+          image = images.onlooker;
+          break;
+        case 'forager':
+          image = images.forager;
+          break;
+      }
       ctx.drawImage(image, bee.x - 10, bee.y - 10, 20, 20);
     });
-  }, [bees, foodSources, images, canvasWidth, canvasHeight]);
+  }, [bees, foodSources, images, canvasWidth, canvasHeight, hive]);
 
   useEffect(() => {
     loadImages();
@@ -169,10 +234,9 @@ const BeeColonyOptimization: React.FC = () => {
 
   useEffect(() => {
     if (images) {
-      initializeBees();
-      initializeFoodSources();
+      initializeSimulation();
     }
-  }, [images, initializeBees, initializeFoodSources]);
+  }, [images, initializeSimulation]);
 
   useEffect(() => {
     const intervalId = setInterval(updateSimulation, 1000 / speed);
